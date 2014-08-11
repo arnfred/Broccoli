@@ -11,8 +11,10 @@ scalacOptions ++= Seq("-unchecked", "-Ywarn-dead-code", "-deprecation")
 libraryDependencies  ++= Seq(
             // other dependencies here
             // pick and choose:
-			"joda-time" % "joda-time" % "2.2",
-			"org.joda" % "joda-convert" % "1.2"
+            "org.scalacheck" %% "scalacheck" % "1.11.5",
+	    "org.scalatest" %% "scalatest" % "2.2.1",
+            "joda-time" % "joda-time" % "2.2",
+            "org.joda" % "joda-convert" % "1.2"
 )
 
 resolvers ++= Seq(
