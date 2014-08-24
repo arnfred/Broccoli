@@ -8,12 +8,12 @@ class BroccoliSpec extends FlatSpec with Matchers {
     val broc = new BroccoliTable[Int, Int]
     broc.put(0,1)
     broc.put(0,2)
-    broc.get(0, None) should be (Some(2))
+    broc.get(0) should be (Some(2))
   }
 
   it should "return None when a key isn't found" in {
     val broc = new BroccoliTable[Int, Int]
-    broc.get(0, None) should be (None)
+    broc.get(0) should be (None)
   }
 
   it should "save a revision for each destructive update" in {
@@ -21,10 +21,10 @@ class BroccoliSpec extends FlatSpec with Matchers {
     val no_revision = broc.put(0,1)
     val revision_1 = broc.put(0,2)
     val revision_2 = broc.put(0,3)
-    no_revision should be (None)
+    no_revision should be (Revision(0))
     broc.get(0, revision_1) should be (Some(2))
     broc.get(0, revision_2) should be (Some(3))
-    broc.get(0, no_revision) should be (Some(3))
+    broc.get(0) should be (Some(3))
   }
 }
 
