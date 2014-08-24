@@ -2,12 +2,13 @@ package broccoli.core
 
 import scala.collection.concurrent.TrieMap
 import scala.collection.Map
+import scala.concurrent.stm._
 
 case class Revision(key : Int)
 
 class BroccoliTable[K, V] {
 
-  var headRev : Revision = Revision(0)
+  var headRev : Ref[Revision] = Ref(Revision(0))
   val head : TrieMap[K, V] = TrieMap.empty
   val revisions : TrieMap[Revision, Map[K, V]] = TrieMap.empty
   val inverse : TrieMap[V, K] = TrieMap.empty
@@ -21,7 +22,7 @@ class BroccoliTable[K, V] {
       snapshot(key, value)
     }
     // If key doesn't already exist, return headRev
-    revOption.getOrElse(headRev)
+    revOption.getOrElse(headRev.single())
   }
 
   // Fetches value stored at key. Returns None if key isn't set
@@ -66,12 +67,19 @@ class BroccoliTable[K, V] {
     val rev = Revision(inverse.computeHash(value))
     head.update(key, value)
     val s : Map[K,V] = head.readOnlySnapshot()
-    val oldRev = headRev
+    var oldRev = headRev.single()
     s(key) match {
       // If snapshow contains value then compute revision and return
-      case value => {
+      case v if v == value => {
         revisions.put(rev, s)
-        headRev = rev
+        // We only update the headRev if it hasn't been updated by other process
+        // If another process has already updated the headRev, then there is no
+        // reason to change anything else.
+        atomic { implicit txn =>
+          if (headRev() == oldRev) {
+            headRev() = rev
+          }
+        }
         rev
       }
       // otherwise try again
