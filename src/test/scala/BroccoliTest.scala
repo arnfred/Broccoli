@@ -42,7 +42,7 @@ class BroccoliSpec extends FlatSpec with Matchers {
     val f4 : Future[Int] = Future { Util.inc(200, broc) }
     val all = f1.zip(f2).zip(f3).zip(f4)
     all.onComplete { _ =>
-      broc.get(0).get should be < (400)
+      broc.get(0).get should be < (800)
     }
   }
 
@@ -55,7 +55,7 @@ class BroccoliSpec extends FlatSpec with Matchers {
     val f4 : Future[Int] = Future { Util.incBad(200, broc) }
     val all = f1.zip(f2).zip(f3).zip(f4)
     all.onComplete { _ =>
-      broc.get(0).get should be < (400)
+      broc.get(0).get should be < (800)
     }
   }
 }
