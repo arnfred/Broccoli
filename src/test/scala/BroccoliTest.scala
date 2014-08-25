@@ -1,5 +1,5 @@
-import concurrent.Future
-import concurrent.duration.Duration
+import concurrent.{Future, Await}
+import scala.concurrent.duration._
 import concurrent.ExecutionContext
 import java.util.concurrent.Executors
 import org.scalacheck._
@@ -21,6 +21,20 @@ class BroccoliSpec extends FlatSpec with Matchers {
     val broc = new BroccoliTable[Int, Int]
     broc.get(0) should be (None)
   }
+
+  it should "Be idempotent for put and updateRevision" in {
+    val broc = new BroccoliTable[Int, Int]
+    broc.put(0,1)
+    val revision_1 = broc.put(0,1)
+    val revision_2 = broc.put(0,1)
+    revision_1 should be (revision_2)
+    broc.get(0) should be (Some(1))
+    broc.updateRevision(0, (v => v + 1), revision_1)
+    broc.updateRevision(0, (v => v + 1), revision_1)
+    broc.updateRevision(0, (v => v + 1), revision_1)
+    broc.get(0) should be (Some(2))
+  }
+
 
   it should "save a revision for each destructive update" in {
     val broc = new BroccoliTable[Int, Int]
