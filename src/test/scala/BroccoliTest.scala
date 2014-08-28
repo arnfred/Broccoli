@@ -62,6 +62,8 @@ class BroccoliSpec extends FlatSpec with Matchers {
     broc.get(0).get.data should be (8000)
   }
 
+  // I want this test because it assures that the above test can fail
+  // under the current system setup
   it should "verify that inc is done concurrently" in {
     val broc = new BroccoliTable[Int, Int]
     broc.put(0,0) //  Initialize to 0
@@ -111,7 +113,7 @@ object Util {
     for (i <- 1 to n) {
       for (past_val <- broc.head.get(0)) yield {
         val next = past_val.data + 1
-        broc.head.put(0, Value(next, System.currentTimeMillis))
+        broc.head.put(0, Value(next, System.currentTimeMillis, 0))
       }
       Thread.sleep(1)
     }
