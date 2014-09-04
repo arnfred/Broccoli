@@ -54,13 +54,9 @@ class BroccoliTable[K, V] {
     // We need to check that the revision isn't staked i.e. that another process
     // isn't in the progress of saving it and might already have made a snapshot
     // before `value` was added to the map.
-    if (!saved) {
-      if (revisions.get(currentRev) != None) {
-        //println(s"""key: $key, val: $value, currentRev: $currentRev""")
-        //currentRev = put(key, value)
-        currentRev = rev
-        overwrite(key, value, rev)
-      }
+    if (!saved && revisions.get(currentRev) != None) {
+      currentRev = rev
+      overwrite(key, value, rev)
     }
     currentRev
   }

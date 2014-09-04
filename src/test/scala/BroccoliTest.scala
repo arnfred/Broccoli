@@ -11,6 +11,7 @@ import broccoli.core._
 class BroccoliSpec extends FlatSpec with Matchers {
   val executorService = Executors.newFixedThreadPool(4)
   implicit val executionContext = ExecutionContext.fromExecutorService(executorService)
+  val amounts = List(523, 1134, 585, 594, 1482, 1242, 488, 1745, 1027, 1508)
 
   "BroccoliTable" should "return the last value inserted for a given key" in {
     val broc = new BroccoliTable[Int, Int]
@@ -53,77 +54,61 @@ class BroccoliSpec extends FlatSpec with Matchers {
 
   it should "apply all updates atomically" in {
     val broc = new BroccoliTable[Int, Int]
+    def getFuture(n : Int) : Future[Int] = Future { 
+      for (i <- 1 to n) {
+        broc.update(0, { k => k + 1 })
+      }
+      n
+    }
     broc.put(0,0) //  Initialize to 0
-    val f1 : Future[Int] = Future { Util.inc(2000, broc) }
-    val f2 : Future[Int] = Future { Util.inc(2000, broc) }
-    val f3 : Future[Int] = Future { Util.inc(2000, broc) }
-    val f4 : Future[Int] = Future { Util.inc(2000, broc) }
-    val all = f1.zip(f2).zip(f3).zip(f4)
-    Await.result(all, 4 seconds)
-    broc.get(0).get.data should be (8000)
+    val futures = Future.sequence(amounts.map(getFuture))
+    Await.result(futures, 4 seconds)
+    broc.get(0).get.data should be (amounts.sum)
   }
 
   // I want this test because it assures that the above test can fail
   // under the current system setup
   it should "verify that inc is done concurrently" in {
     val broc = new BroccoliTable[Int, Int]
+    def getFuture(n : Int) : Future[Int] = Future { 
+      Util.incBad(n, broc)
+    }
     broc.put(0,0) //  Initialize to 0
-    val f1 : Future[Int] = Future { Util.incBad(2000, broc) }
-    val f2 : Future[Int] = Future { Util.incBad(2000, broc) }
-    val f3 : Future[Int] = Future { Util.incBad(2000, broc) }
-    val f4 : Future[Int] = Future { Util.incBad(2000, broc) }
-    val all = Future.sequence(List(f1,f2,f3,f4))
-    Await.result(all, 4 seconds)
-    broc.get(0).get.data should be < (8000)
+    val futures = Future.sequence(amounts.map(getFuture))
+    Await.result(futures, 4 seconds)
+    broc.get(0).get.data should be < (amounts.sum)
   }
 
   it should """assure that for every `put`, the revision contains the value
   that was put in. (Across values)""" in {
     val broc = new BroccoliTable[Int, Int]
-    val f1 : Future[List[(Revision, Int)]] = Future { 
-      (for (k <- 0 to 2000) yield { 
+    def getFuture(n : Int) : Future[List[(Revision, Int)]] = Future { 
+      (for (k <- 0 to n) yield { 
         (broc.put(0, k), k)
       }).toList
     }
-    val f5 : Future[List[(Revision, Int)]] = Future { 
-      (for (k <- 0 to 2000) yield { 
-        (broc.put(0, k*5), k)
-      }).toList
-    }
-    val all : Future[(List[(Revision, Int)],List[(Revision, Int)])] = f1.zip(f5)
-    // Wait for things to calm down
-    val (rev_f1s, rev_f5s) = Await.result(all, 4 seconds)
-    for ((rev,i) <- rev_f1s) {
-      broc.get(0, rev).get.data should be (i)
-    }
-    for ((rev,i) <- rev_f5s) {
-      broc.get(0, rev).get.data should be (i*5)
+    val futures = Future.sequence(amounts.map(getFuture))
+    val results = Await.result(futures, 4 seconds)
+    for (revs <- results; (rev, k) <- revs) {
+      broc.get(0, rev).get.data should be (k)
     }
   }
 
   it should """assure that for every `put`, the revision contains the value
   that was put in. (Across keys)""" in {
     val broc = new BroccoliTable[Int, Int]
-    val f1 : Future[List[(Revision, Int)]] = Future { 
-      (for (k <- 0 to 2000) yield { 
+    def getFuture(n : Int) : Future[List[(Revision, Int)]] = Future { 
+      (for (k <- 0 to n) yield { 
         (broc.put(k, 0), k)
       }).toList
     }
-    val f5 : Future[List[(Revision, Int)]] = Future { 
-      (for (k <- 0 to 2000) yield { 
-        (broc.put(k*5, 0), k)
-      }).toList
-    }
-    val all : Future[(List[(Revision, Int)],List[(Revision, Int)])] = f1.zip(f5)
-    // Wait for things to calm down
-    val (rev_f1s, rev_f5s) = Await.result(all, 4 seconds)
-    for ((rev,i) <- rev_f1s) {
-      broc.get(i, rev).get.data should be (0)
-    }
-    for ((rev,i) <- rev_f5s) {
-      broc.get(i*5, rev).get.data should be (0)
+    val futures = Future.sequence(amounts.map(getFuture))
+    val results = Await.result(futures, 4 seconds)
+    for (revs <- results; (rev, k) <- revs) {
+      broc.get(k, rev).get.data should be (0)
     }
   }
+
 
   it should """assure that for every `put`, the revision contains the values 
   that was put in. (Across values and keys)""" in {
@@ -135,7 +120,6 @@ class BroccoliSpec extends FlatSpec with Matchers {
         (broc.put(key, value), key, value)
       }).toList
     }
-    val amounts = List(1000, 500, 2000, 532, 252, 742, 2435)
     val futures = Future.sequence(amounts.map(getFuture))
     val results = Await.result(futures, 4 seconds)
     for (revs <- results; (rev, k, v) <- revs) {
@@ -148,13 +132,10 @@ class BroccoliSpec extends FlatSpec with Matchers {
 }
 
 object Util {
-  def inc(n: Int, broc: BroccoliTable[Int, Int]): Int = {
-    for (i <- 1 to n) {
-      broc.update(0, { k => k + 1 })
-      Thread.sleep(1)
-    }
-    n
-  }
+
+  def amounts(n : Int, loft : Int = 2500) : List[Int] = {
+    for (k <- 1 to n) yield Math.abs(Random.nextInt % loft)
+  } toList
 
   def incBad(n: Int, broc: BroccoliTable[Int, Int]): Int = {
     for (i <- 1 to n) {
@@ -162,20 +143,7 @@ object Util {
         val next = past_val.data + 1
         broc.head.put(0, Value(next, System.currentTimeMillis, 0))
       }
-      Thread.sleep(1)
     }
     n
   }
 }
-
-
-//object BroccoliSpecification extends Properties("Broccoli") {
-//  import Prop.forAll
-//
-//  property("reverse") = forAll { l: List[String] => l.reverse.reverse == l }
-//
-//  property("concat") = forAll { (s1: String, s2: String) =>
-//    (s1 + s2).endsWith(s2)
-//  }
-//
-//}
