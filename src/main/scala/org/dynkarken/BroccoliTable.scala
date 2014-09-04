@@ -27,35 +27,37 @@ class BroccoliTable[K, V] {
   def put(key : K, value : Value[V]) : Revision = {
     val rev = Revision(inverse.computeHash(value))
     var currentRev = headRev
-    var not_saved = true
+    var saved = false
+    //println(s"""Adding value: $value under key: $key\nwith rev: $rev and headRev/currentRev: $headRev""")
     // `head.putIfAbsent` is Some(value) if key already exists
-    for (past_val <- head.putIfAbsent(key, value)) {
+    val savedRev = for (past_val <- head.putIfAbsent(key, value)) yield {
+      //println(s"""Key already exists as `$past_val`, updating...""")
       var past = past_val
-      while (not_saved) {
+      while (!saved) {
+        // When the data is already present we just check that we have an up to
+        // date `currentRev` before returning
+        if (value.data == past.data) {
+          if (currentRev == headRev) saved = true
+          else {
+            currentRev = headRev
+            past = get(key, currentRev).get
+          }
+        }
         // only update if value isn't the current value
-        if (value.data != past.data) {
+        else {
           overwrite(key, value, rev)
           currentRev = rev
-          not_saved = false
-        }
-        // It's possible that the value changed after we assigned `currentRev`
-        // If `currentRev` is still equal to `headRev` or the value in the 
-        // `currentRev` revision is equal to value then all is fine
-        else if (currentRev == headRev || get(key, currentRev) == Some(past)) {
-          not_saved = false
-        }
-        else { // Update `currentRev` and `past` and try again
-          currentRev = headRev
-          past = head(key)
+          saved = true
         }
       }
+      currentRev
     }
-    // It is possible that `headRev` was updated after `currentRev` was
-    // assigned and the call to `head.putIfAbsent` added the value to a later
-    // revision. In this case we overwrite the value and return `rev`.
-    if (not_saved && currentRev != headRev && get(key, currentRev).get.data != value.data) {
-      overwrite(key, value, rev)
-      currentRev = rev
+    // We need to check that the revision is in order
+    if (savedRev == None) {
+      if (revisions.get(currentRev) != None &&
+          get(key, currentRev).map(_.data) != Some(value.data)) {
+        currentRev = put(key, value)
+      }
     }
     currentRev
   }
@@ -73,20 +75,39 @@ class BroccoliTable[K, V] {
       for (revMap <- revisions.get(rev);
            value <- revMap.get(key)) yield value
     }
-    // Otherwise, we have to be careful that we don't overwrite the value
-    // in a new revision concurrently with fetching it
+    // Otherwise, we have to be careful that another thread won't overwrite the
+    // value in a new revision concurrently with fetching it
     else {
-      val value = for (value <- head.get(key)) yield value
-      if (rev != headRev) {
-        for (value <- revisions(rev).get(key)) yield value
-      }
+      val value = head.get(key)
+      if (rev != headRev) revisions(rev).get(key)
       else value
     }
   }
 
 
-  // Update map by applying a function to the current value
-  // Return None if key isn't set. This function is not idempotent
+  /**
+   * We guarantee that when `rev = put(key, val)` then `get(key, rev) == val`
+   *
+   * We have a `headRev` containing the current revision and a set of `revisions`
+   * containing all past revisions. When a value is updated, we save `headRev`
+   * to `revisions` and proceed to update `head` afterwards
+   *
+   * To uphold the guarantee we need to careful with two scenarios:
+   * 1. If there is a gap between saving a revision and updating the new value,
+   *    then another process can update the same value and save our revision
+   *    before we can add the value to it, violating the guarantee
+   * 2. If we take a snapshot and a new value is added to the revision before
+   *    we save the snapshot to `revisions`, then the revision is saved without
+   *    the new value
+   *
+   * To protect against #1 we never overwrite a revision that is saved, but
+   * instead waits for `headRev` to be updated before saving
+   *
+   * To protect against #2 we always stake a claim for a revision by adding an
+   * empty revision before creating the snapshot and overwriting it. This makes
+   * it possible to check in `put` if the revision has already been staked, in
+   * which case we add the value under a new revision
+   */
   def update(key : K, valueFun : (V => V)) : Option[Value[V]] = {
     for (past_val <- head.get(key)) yield {
       var past = past_val // We need a var
@@ -95,9 +116,9 @@ class BroccoliTable[K, V] {
       // Loop until we managed to update the value
       while (!head.replace(key, past, next) &&
              !head.replace(key, next, 
-               Value(valueFun(next.data), next.timestamp, next.salt))) {
+               Value(valueFun(next.data), past.timestamp, past.salt))) {
         past = head(key)
-        next = Value(valueFun(past.data), past.timestamp, next.salt)
+        next = Value(valueFun(past.data), past.timestamp, past.salt)
       }
       next
     }
@@ -110,7 +131,7 @@ class BroccoliTable[K, V] {
                      valueFun : (V => V),
                      revision : Revision) : Option[(Value[V], Revision)] = {
     for (past <- get(key, revision)) yield {
-      val next = Value(valueFun(past.data), System.currentTimeMillis, past.salt)
+      val next = Value(valueFun(past.data), System.currentTimeMillis, Random.nextInt)
       (next, put(key, next))
     }
   }
@@ -121,10 +142,13 @@ class BroccoliTable[K, V] {
     // We cannot overwrite a revision, so if a thread has already taken a
     // snapshot with current value of headRev, we block until that thread
     // updates headRev
-    var currentRev = headRev
+    var currentRev = headRev // MUST come before snapshot
+    val empty : Map[K, Value[V]] = Map.empty
+    revisions.putIfAbsent(currentRev, empty)
     var snapshot = head.readOnlySnapshot()
-    while (revisions.putIfAbsent(currentRev, snapshot) != None) {
-      currentRev = headRev
+    while (!revisions.replace(currentRev, empty, snapshot)) {
+      currentRev = headRev // MUST come before snapshot
+      revisions.putIfAbsent(currentRev, empty)
       snapshot = head.readOnlySnapshot()
     }
     // The order here is important. The update must come before we reassign

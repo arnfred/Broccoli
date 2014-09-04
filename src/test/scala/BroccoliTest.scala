@@ -3,6 +3,7 @@ import scala.concurrent.duration._
 import concurrent.ExecutionContext
 import java.util.concurrent.Executors
 import scala.util.{Success, Failure}
+import scala.util.Random
 import org.scalacheck._
 import org.scalatest._
 import broccoli.core._
@@ -71,12 +72,13 @@ class BroccoliSpec extends FlatSpec with Matchers {
     val f2 : Future[Int] = Future { Util.incBad(2000, broc) }
     val f3 : Future[Int] = Future { Util.incBad(2000, broc) }
     val f4 : Future[Int] = Future { Util.incBad(2000, broc) }
-    val all = f1.zip(f2).zip(f3).zip(f4)
+    val all = Future.sequence(List(f1,f2,f3,f4))
     Await.result(all, 4 seconds)
     broc.get(0).get.data should be < (8000)
   }
 
-  it should "return a revision that contains the value passed" in {
+  it should """assure that for every `put`, the revision contains the value
+  that was put in. (Across values)""" in {
     val broc = new BroccoliTable[Int, Int]
     val f1 : Future[List[(Revision, Int)]] = Future { 
       (for (k <- 0 to 2000) yield { 
@@ -96,6 +98,51 @@ class BroccoliSpec extends FlatSpec with Matchers {
     }
     for ((rev,i) <- rev_f5s) {
       broc.get(0, rev).get.data should be (i*5)
+    }
+  }
+
+  it should """assure that for every `put`, the revision contains the value
+  that was put in. (Across keys)""" in {
+    val broc = new BroccoliTable[Int, Int]
+    val f1 : Future[List[(Revision, Int)]] = Future { 
+      (for (k <- 0 to 2000) yield { 
+        (broc.put(k, 0), k)
+      }).toList
+    }
+    val f5 : Future[List[(Revision, Int)]] = Future { 
+      (for (k <- 0 to 2000) yield { 
+        (broc.put(k*5, 0), k)
+      }).toList
+    }
+    val all : Future[(List[(Revision, Int)],List[(Revision, Int)])] = f1.zip(f5)
+    // Wait for things to calm down
+    val (rev_f1s, rev_f5s) = Await.result(all, 4 seconds)
+    for ((rev,i) <- rev_f1s) {
+      broc.get(i, rev).get.data should be (0)
+    }
+    for ((rev,i) <- rev_f5s) {
+      broc.get(i*5, rev).get.data should be (0)
+    }
+  }
+
+  it should """assure that for every `put`, the revision contains the values 
+  that was put in. (Across values and keys)""" in {
+    val broc = new BroccoliTable[Int, Int]
+    def getFuture(n : Int) : Future[List[(Revision, Int, Int)]] = Future { 
+      (for (k <- 0 to n) yield { 
+        var value = Random.nextInt % 100
+        var key = Random.nextInt % 100
+        (broc.put(key, value), key, value)
+      }).toList
+    }
+    val amounts = List(1000, 500, 2000, 532, 252, 742, 2435)
+    val futures = Future.sequence(amounts.map(getFuture))
+    val results = Await.result(futures, 4 seconds)
+    for (revs <- results; (rev, k, v) <- revs) {
+      broc.get(k, rev) match {
+        case Some(value) => value.data should be (v)
+        case None => fail(s"""k: $k, rev: $rev""")
+      }
     }
   }
 }
