@@ -28,9 +28,8 @@ class BroccoliTable[K, V] {
     val rev = Revision(inverse.computeHash(value))
     var currentRev = headRev
     var saved = false
-    //println(s"""Adding value: $value under key: $key\nwith rev: $rev and headRev/currentRev: $headRev""")
     // `head.putIfAbsent` is Some(value) if key already exists
-    val savedRev = for (past_val <- head.putIfAbsent(key, value)) yield {
+    for (past_val <- head.putIfAbsent(key, value)) {
       //println(s"""Key already exists as `$past_val`, updating...""")
       var past = past_val
       while (!saved) {
@@ -52,11 +51,15 @@ class BroccoliTable[K, V] {
       }
       currentRev
     }
-    // We need to check that the revision is in order
-    if (savedRev == None) {
-      if (revisions.get(currentRev) != None &&
-          get(key, currentRev).map(_.data) != Some(value.data)) {
-        currentRev = put(key, value)
+    // We need to check that the revision isn't staked i.e. that another process
+    // isn't in the progress of saving it and might already have made a snapshot
+    // before `value` was added to the map.
+    if (!saved) {
+      if (revisions.get(currentRev) != None) {
+        //println(s"""key: $key, val: $value, currentRev: $currentRev""")
+        //currentRev = put(key, value)
+        currentRev = rev
+        overwrite(key, value, rev)
       }
     }
     currentRev
@@ -85,29 +88,6 @@ class BroccoliTable[K, V] {
   }
 
 
-  /**
-   * We guarantee that when `rev = put(key, val)` then `get(key, rev) == val`
-   *
-   * We have a `headRev` containing the current revision and a set of `revisions`
-   * containing all past revisions. When a value is updated, we save `headRev`
-   * to `revisions` and proceed to update `head` afterwards
-   *
-   * To uphold the guarantee we need to careful with two scenarios:
-   * 1. If there is a gap between saving a revision and updating the new value,
-   *    then another process can update the same value and save our revision
-   *    before we can add the value to it, violating the guarantee
-   * 2. If we take a snapshot and a new value is added to the revision before
-   *    we save the snapshot to `revisions`, then the revision is saved without
-   *    the new value
-   *
-   * To protect against #1 we never overwrite a revision that is saved, but
-   * instead waits for `headRev` to be updated before saving
-   *
-   * To protect against #2 we always stake a claim for a revision by adding an
-   * empty revision before creating the snapshot and overwriting it. This makes
-   * it possible to check in `put` if the revision has already been staked, in
-   * which case we add the value under a new revision
-   */
   def update(key : K, valueFun : (V => V)) : Option[Value[V]] = {
     for (past_val <- head.get(key)) yield {
       var past = past_val // We need a var
@@ -137,7 +117,29 @@ class BroccoliTable[K, V] {
   }
 
 
-  // Overwrite already existing value
+  /**
+   * We guarantee that when `rev = put(key, val)` then `get(key, rev) == val`
+   *
+   * We have a `headRev` containing the current revision and a set of `revisions`
+   * containing all past revisions. When a value is updated, we save `headRev`
+   * to `revisions` and proceed to update `head` afterwards
+   *
+   * To uphold the guarantee we need to careful with two scenarios:
+   * 1. If there is a gap between saving a revision and updating the new value,
+   *    then another process can update the same value and save our revision
+   *    before we can add the value to it, violating the guarantee
+   * 2. If we take a snapshot and a new value is added to the revision before
+   *    we save the snapshot to `revisions`, then the revision is saved without
+   *    the new value
+   *
+   * To protect against #1 we never overwrite a revision that is saved, but
+   * instead waits for `headRev` to be updated before saving
+   *
+   * To protect against #2 we always stake a claim for a revision by adding an
+   * empty revision before creating the snapshot and overwriting it. This makes
+   * it possible to check in `put` if the revision has already been staked, in
+   * which case we add the value under a new revision
+   */
   private def overwrite(key: K, value: Value[V], newRev: Revision): Unit = {
     // We cannot overwrite a revision, so if a thread has already taken a
     // snapshot with current value of headRev, we block until that thread
@@ -157,5 +159,4 @@ class BroccoliTable[K, V] {
     head.update(key, value)
     headRev = newRev
   }
-
 }

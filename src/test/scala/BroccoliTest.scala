@@ -131,7 +131,7 @@ class BroccoliSpec extends FlatSpec with Matchers {
     def getFuture(n : Int) : Future[List[(Revision, Int, Int)]] = Future { 
       (for (k <- 0 to n) yield { 
         var value = Random.nextInt % 100
-        var key = Random.nextInt % 100
+        var key = Random.nextInt % 500
         (broc.put(key, value), key, value)
       }).toList
     }
