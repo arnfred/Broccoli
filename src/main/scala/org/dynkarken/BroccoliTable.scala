@@ -6,26 +6,28 @@ import scala.util.Random
 
 case class Revision(key : Int)
 
-case class Value[V](data : V, timestamp : Long, salt: Int)
+case class Value[V](data : V) {
+  val salt: Int  = Random.nextInt
+}
 
 class BroccoliTable[K, V] {
 
   var headRev : Revision = Revision(0)
   val head : TrieMap[K, Value[V]] = TrieMap.empty
   val revisions : TrieMap[Revision, Map[K, Value[V]]] = TrieMap.empty
-  val inverse : TrieMap[Value[V], K] = TrieMap.empty
+  val valueHash : (Value[V] => Int) = TrieMap.empty.computeHash(_)
 
 
   // Inserts data that is converted to a value automatically
   // TODO: update to return value?
   def put(key: K, data: V): Revision = {
-    put(key, Value(data, System.currentTimeMillis, Random.nextInt))
+    put(key, Value(data))
   }
 
   // Inserts or updates value at position key. This operation is idempotent
   // A revision is returned if a value is updated. Otherwise None is returned
   def put(key : K, value : Value[V]) : Revision = {
-    val rev = Revision(inverse.computeHash(value))
+    val rev = Revision(valueHash(value) + value.salt)
     var currentRev = headRev
     var saved = false
     // `head.putIfAbsent` is Some(value) if key already exists
@@ -63,9 +65,7 @@ class BroccoliTable[K, V] {
 
 
   // Fetches value stored at key. Returns None if key isn't set
-  def get(key : K) : Option[Value[V]] = {
-    for (value <- head.get(key)) yield value
-  }
+  def get(key : K) : Option[Value[V]] = head.get(key)
 
 
   def get(key : K, rev : Revision) : Option[Value[V]] = {
@@ -75,7 +75,7 @@ class BroccoliTable[K, V] {
            value <- revMap.get(key)) yield value
     }
     // Otherwise, we have to be careful that another thread won't overwrite the
-    // value in a new revision concurrently with fetching it
+    // value in a new revision concurrently with us fetching it
     else {
       val value = head.get(key)
       if (rev != headRev) revisions(rev).get(key)
@@ -87,14 +87,12 @@ class BroccoliTable[K, V] {
   def update(key : K, valueFun : (V => V)) : Option[Value[V]] = {
     for (past_val <- head.get(key)) yield {
       var past = past_val // We need a var
-      var next = Value(valueFun(past.data), past.timestamp, past.salt)
+      var next = Value(valueFun(past.data))
       var i = 0
       // Loop until we managed to update the value
-      while (!head.replace(key, past, next) &&
-             !head.replace(key, next, 
-               Value(valueFun(next.data), past.timestamp, past.salt))) {
+      while (!head.replace(key, past, next)) {
         past = head(key)
-        next = Value(valueFun(past.data), past.timestamp, past.salt)
+        next = Value(valueFun(past.data))
       }
       next
     }
@@ -107,7 +105,7 @@ class BroccoliTable[K, V] {
                      valueFun : (V => V),
                      revision : Revision) : Option[(Value[V], Revision)] = {
     for (past <- get(key, revision)) yield {
-      val next = Value(valueFun(past.data), System.currentTimeMillis, Random.nextInt)
+      val next = Value(valueFun(past.data))
       (next, put(key, next))
     }
   }

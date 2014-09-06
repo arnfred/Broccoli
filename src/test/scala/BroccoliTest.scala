@@ -13,6 +13,7 @@ class BroccoliSpec extends FlatSpec with Matchers {
   implicit val executionContext = ExecutionContext.fromExecutorService(executorService)
   val amounts = List(523, 1134, 585, 594, 1482, 1242, 488, 1745, 1027, 1508)
 
+
   "BroccoliTable" should "return the last value inserted for a given key" in {
     val broc = new BroccoliTable[Int, Int]
     broc.put(0,1)
@@ -20,10 +21,12 @@ class BroccoliSpec extends FlatSpec with Matchers {
     broc.get(0).get.data should be (2)
   }
 
+
   it should "return None when a key isn't found" in {
     val broc = new BroccoliTable[Int, Int]
     broc.get(0) should be (None)
   }
+
 
   it should "Be idempotent for put and updateRevision" in {
     val broc = new BroccoliTable[Int, Int]
@@ -39,6 +42,7 @@ class BroccoliSpec extends FlatSpec with Matchers {
     broc.get(0).get.data should be (2)
   }
 
+
   it should "save a revision for each destructive update" in {
     val broc = new BroccoliTable[Int, Int]
     val no_revision = broc.put(0,1)
@@ -47,10 +51,10 @@ class BroccoliSpec extends FlatSpec with Matchers {
     no_revision should be (Revision(0))
     broc.get(0, revision_1).get.data should be (2)
     broc.get(0, revision_2).get.data should be (3)
-    broc.get(0, revision_1).get.timestamp should be <= broc.get(0, revision_2).get.timestamp
     broc.get(0, revision_2).get.data should be (3)
     broc.get(0).get.data should be (3)
   }
+
 
   it should "apply all updates atomically" in {
     val broc = new BroccoliTable[Int, Int]
@@ -66,6 +70,7 @@ class BroccoliSpec extends FlatSpec with Matchers {
     broc.get(0).get.data should be (amounts.sum)
   }
 
+
   // I want this test because it assures that the above test can fail
   // under the current system setup
   it should "verify that inc is done concurrently" in {
@@ -78,6 +83,7 @@ class BroccoliSpec extends FlatSpec with Matchers {
     Await.result(futures, 4 seconds)
     broc.get(0).get.data should be < (amounts.sum)
   }
+
 
   it should """assure that for every `put`, the revision contains the value
   that was put in. (Across values)""" in {
@@ -93,6 +99,7 @@ class BroccoliSpec extends FlatSpec with Matchers {
       broc.get(0, rev).get.data should be (k)
     }
   }
+
 
   it should """assure that for every `put`, the revision contains the value
   that was put in. (Across keys)""" in {
@@ -129,6 +136,29 @@ class BroccoliSpec extends FlatSpec with Matchers {
       }
     }
   }
+
+
+  it should """guarantee that `get` will retrieve the right value""" in {
+    val broc = new BroccoliTable[Int, Int]
+    def getFuture(n : Int) : Future[List[(Int, Option[Value[Int]])]] = Future { 
+      (for (k <- 0 to n) yield { 
+        val value = Random.nextInt % 100
+        val key = Random.nextInt % 10
+        val rev = broc.put(key, value)
+        val ret = broc.get(key, rev)
+        (value, ret)
+      }).toList
+    }
+    val futures = Future.sequence(amounts.map(getFuture))
+    val results = Await.result(futures, 4 seconds)
+    for (revs <- results; (value, ret) <- revs) {
+      ret match {
+        case Some(retval) => value should be (retval.data)
+        case None => fail(s"""value: $value wasn't stored""")
+      }
+    }
+  }
+
 }
 
 object Util {
@@ -141,7 +171,7 @@ object Util {
     for (i <- 1 to n) {
       for (past_val <- broc.head.get(0)) yield {
         val next = past_val.data + 1
-        broc.head.put(0, Value(next, System.currentTimeMillis, 0))
+        broc.head.put(0, Value(next))
       }
     }
     n
