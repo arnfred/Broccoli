@@ -14,8 +14,8 @@ class BroccoliSpec extends FlatSpec with Matchers {
   val amounts = List(523, 1134, 585, 594, 1482, 1242, 488, 1745, 1027, 1508)
 
 
-  "BroccoliTable" should "return the last value inserted for a given key" in {
-    val broc = new BroccoliTable[Int, Int]
+  "RevisionMap" should "return the last value inserted for a given key" in {
+    val broc = new RevisionMap[Int, Int]
     broc.put(0,1)
     broc.put(0,2)
     broc.get(0).get.data should be (2)
@@ -23,16 +23,16 @@ class BroccoliSpec extends FlatSpec with Matchers {
 
 
   it should "return None when a key isn't found" in {
-    val broc = new BroccoliTable[Int, Int]
+    val broc = new RevisionMap[Int, Int]
     broc.get(0) should be (None)
   }
 
 
   it should "Be idempotent for put and updateRevision" in {
-    val broc = new BroccoliTable[Int, Int]
+    val broc = new RevisionMap[Int, Int]
     broc.put(0,1)
-    val revision_1 = broc.put(0,1)
-    val revision_2 = broc.put(0,1)
+    val (val_1, revision_1) = broc.put(0,1)
+    val (val_2, revision_2) = broc.put(0,1)
     revision_1 should be (revision_2)
     broc.get(0).get.data should be (1)
     val Some((_, revision_3)) = broc.updateRevision(0, (v => v + 1), revision_1)
@@ -44,10 +44,10 @@ class BroccoliSpec extends FlatSpec with Matchers {
 
 
   it should "save a revision for each destructive update" in {
-    val broc = new BroccoliTable[Int, Int]
-    val revision_0 = broc.put(0,1)
-    val revision_1 = broc.put(0,2)
-    val revision_2 = broc.put(0,3)
+    val broc = new RevisionMap[Int, Int]
+    val (val_0, revision_0) = broc.put(0,1)
+    val (val_1, revision_1) = broc.put(0,2)
+    val (val_2, revision_2) = broc.put(0,3)
     broc.get(0, revision_0).get.data should be (1)
     broc.get(0, revision_1).get.data should be (2)
     broc.get(0, revision_2).get.data should be (3)
@@ -56,11 +56,11 @@ class BroccoliSpec extends FlatSpec with Matchers {
 
 
   it should "return revisions that are unique to the value inserted" in {
-    val broc = new BroccoliTable[Int, Int]
-    val revision_1 = broc.put(0,1)
-    val computed_revision = broc.getRevision(broc.get(0).get)
-    val revision_2 = broc.put(0,1)
-    val revision_3 = broc.put(0,2)
+    val broc = new RevisionMap[Int, Int]
+    val (val_1, revision_1) = broc.put(0,1)
+    val computed_revision = broc.getRevision(val_1)
+    val (val_2, revision_2) = broc.put(0,1)
+    val (val_3, revision_3) = broc.put(0,2)
     revision_1 should be (computed_revision)
     revision_2 should be (revision_1)
     revision_3 should not be (revision_1)
@@ -68,7 +68,7 @@ class BroccoliSpec extends FlatSpec with Matchers {
 
 
   it should "apply all updates atomically" in {
-    val broc = new BroccoliTable[Int, Int]
+    val broc = new RevisionMap[Int, Int]
     def getFuture(n : Int) : Future[Int] = Future { 
       for (i <- 1 to n) {
         broc.update(0, { k => k + 1 })
@@ -85,7 +85,7 @@ class BroccoliSpec extends FlatSpec with Matchers {
   // I want this test because it assures that the above test can fail
   // under the current system setup
   it should "verify that inc is done concurrently" in {
-    val broc = new BroccoliTable[Int, Int]
+    val broc = new RevisionMap[Int, Int]
     def getFuture(n : Int) : Future[Int] = Future { 
       Util.incBad(n, broc)
     }
@@ -98,10 +98,10 @@ class BroccoliSpec extends FlatSpec with Matchers {
 
   it should """assure that for every `put`, the revision contains the value
   that was put in. (Across values)""" in {
-    val broc = new BroccoliTable[Int, Int]
+    val broc = new RevisionMap[Int, Int]
     def getFuture(n : Int) : Future[List[(Revision, Int)]] = Future { 
       (for (v <- 0 to n) yield { 
-        (broc.put(0, v), v)
+        (broc.put(0, v)._2, v)
       }).toList
     }
     val futures = Future.sequence(amounts.map(getFuture))
@@ -114,10 +114,10 @@ class BroccoliSpec extends FlatSpec with Matchers {
 
   it should """assure that for every `put`, the revision contains the value
   that was put in. (Across keys)""" in {
-    val broc = new BroccoliTable[Int, Int]
+    val broc = new RevisionMap[Int, Int]
     def getFuture(n : Int) : Future[List[(Revision, Int)]] = Future { 
       (for (k <- 0 to n) yield { 
-        (broc.put(k, 0), k)
+        (broc.put(k, 0)._2, k)
       }).toList
     }
     val futures = Future.sequence(amounts.map(getFuture))
@@ -130,12 +130,12 @@ class BroccoliSpec extends FlatSpec with Matchers {
 
   it should """assure that for every `put`, the revision contains the values 
   that was put in. (Across values and keys)""" in {
-    val broc = new BroccoliTable[Int, Int]
+    val broc = new RevisionMap[Int, Int]
     def getFuture(n : Int) : Future[List[(Revision, Int, Int)]] = Future { 
       (for (k <- 0 to n) yield { 
         var value = Random.nextInt % 100
         var key = Random.nextInt % 500
-        (broc.put(key, value), key, value)
+        (broc.put(key, value)._2, key, value)
       }).toList
     }
     val futures = Future.sequence(amounts.map(getFuture))
@@ -150,13 +150,14 @@ class BroccoliSpec extends FlatSpec with Matchers {
 
 
   it should """guarantee that `get` will retrieve the right value""" in {
-    val broc = new BroccoliTable[Int, Int]
+    val broc = new RevisionMap[Int, Int]
     def getFuture(n : Int) : Future[List[(Int, Option[Value[Int]])]] = Future { 
       (for (k <- 0 to n) yield { 
         val value = Random.nextInt % 100
         val key = Random.nextInt % 10
-        val rev = broc.put(key, value)
+        val (ret_orig, rev) = broc.put(key, value)
         val ret = broc.get(key, rev)
+        ret.get should be (ret_orig)
         (value, ret)
       }).toList
     }
@@ -178,7 +179,7 @@ object Util {
     for (k <- 1 to n) yield Math.abs(Random.nextInt % loft)
   } toList
 
-  def incBad(n: Int, broc: BroccoliTable[Int, Int]): Int = {
+  def incBad(n: Int, broc: RevisionMap[Int, Int]): Int = {
     for (i <- 1 to n) {
       for (past_val <- broc.head.get(0)) yield {
         val next = past_val.data + 1

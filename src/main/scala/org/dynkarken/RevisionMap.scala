@@ -10,18 +10,26 @@ case class Value[V](data : V) {
   val salt: Int  = Random.nextInt
 }
 
-class BroccoliTable[K, V] {
+class RevisionMap[K, V] {
 
+  // The current revision
   var headRev : Revision = Revision(0)
+  // The Triemap containing the most recent revision
   val head : TrieMap[K, Value[V]] = TrieMap.empty
-  val revisions : TrieMap[Revision, Map[K, Value[V]]] = TrieMap.empty
+  // A Triemap of snapshots taken for every destructive update
+  val snapshots : TrieMap[Revision, Map[K, Value[V]]] = TrieMap.empty
+  // A function for calculating the hash of a `Value`
   val valueHash : (Value[V] => Int) = TrieMap.empty.computeHash(_)
+  // A Triemap that contains alternate snapshot names.
   val revAlias : TrieMap[Revision, Revision] = TrieMap.empty
 
 
   // Inserts data that is converted to a value automatically
   // TODO: update to return value?
-  def put(key: K, data: V): Revision = put(key, Value(data))
+  def put(key: K, data: V): (Value[V], Revision) = {
+    val value = Value(data)
+    (value, put(key, value))
+  }
 
   // Creates a revision based on a value
   def getRevision(value : Value[V]) : Revision = {
@@ -61,7 +69,7 @@ class BroccoliTable[K, V] {
     // isn't in the progress of saving it and might already have made a snapshot
     // before `value` was added to the map.
     if (!saved) {
-      if (revisions.get(currentRev) != None) {
+      if (snapshots.get(currentRev) != None) {
         overwrite(key, value, rev)
       }
       else {
@@ -77,21 +85,21 @@ class BroccoliTable[K, V] {
 
 
   def get(key : K, rev : Revision) : Option[Value[V]] = {
-    // multiple revisions point to the same snapshot
+    // multiple snapshots point to the same snapshot
     val storedRev : Revision = revAlias.get(rev) match {
       case None => rev
       case Some(alias) => alias
     }
     // In the simple case this is an old revision
     if (storedRev != headRev) {
-      for (revMap <- revisions.get(storedRev);
+      for (revMap <- snapshots.get(storedRev);
            value <- revMap.get(key)) yield value
     }
     // Otherwise, we have to be careful that another thread won't overwrite the
     // value in a new revision concurrently with us fetching it
     else {
       val value = head.get(key)
-      if (storedRev != headRev) revisions(storedRev).get(key)
+      if (storedRev != headRev) snapshots(storedRev).get(key)
       else value
     }
   }
@@ -127,16 +135,16 @@ class BroccoliTable[K, V] {
   /**
    * We guarantee that when `rev = put(key, val)` then `get(key, rev) == val`
    *
-   * We have a `headRev` containing the current revision and a set of `revisions`
-   * containing all past revisions. When a value is updated, we save `headRev`
-   * to `revisions` and proceed to update `head` afterwards
+   * We have a `headRev` containing the current revision and a set of `snapshots`
+   * containing all past snapshots. When a value is updated, we save `headRev`
+   * to `snapshots` and proceed to update `head` afterwards
    *
    * To uphold the guarantee we need to careful with two scenarios:
    * 1. If there is a gap between saving a revision and updating the new value,
    *    then another process can update the same value and save our revision
    *    before we can add the value to it, violating the guarantee
    * 2. If we take a snapshot and a new value is added to the revision before
-   *    we save the snapshot to `revisions`, then the revision is saved without
+   *    we save the snapshot to `snapshots`, then the revision is saved without
    *    the new value
    *
    * To protect against #1 we never overwrite a revision that is saved, but
@@ -153,12 +161,12 @@ class BroccoliTable[K, V] {
     // updates headRev
     var currentRev = headRev // MUST come before snapshot
     val empty : Map[K, Value[V]] = Map.empty
-    revisions.putIfAbsent(currentRev, empty)
-    var snapshot = head.readOnlySnapshot()
-    while (!revisions.replace(currentRev, empty, snapshot)) {
+    snapshots.putIfAbsent(currentRev, empty)
+    var currentSnapshot = head.readOnlySnapshot()
+    while (!snapshots.replace(currentRev, empty, currentSnapshot)) {
       currentRev = headRev // MUST come before snapshot
-      revisions.putIfAbsent(currentRev, empty)
-      snapshot = head.readOnlySnapshot()
+      snapshots.putIfAbsent(currentRev, empty)
+      currentSnapshot = head.readOnlySnapshot()
     }
     // The order here is important. The update must come before we reassign
     // headRev, since any other process is blocked in the snapshot loop until
