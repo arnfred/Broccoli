@@ -45,14 +45,25 @@ class BroccoliSpec extends FlatSpec with Matchers {
 
   it should "save a revision for each destructive update" in {
     val broc = new BroccoliTable[Int, Int]
-    val no_revision = broc.put(0,1)
+    val revision_0 = broc.put(0,1)
     val revision_1 = broc.put(0,2)
     val revision_2 = broc.put(0,3)
-    no_revision should be (Revision(0))
+    broc.get(0, revision_0).get.data should be (1)
     broc.get(0, revision_1).get.data should be (2)
     broc.get(0, revision_2).get.data should be (3)
-    broc.get(0, revision_2).get.data should be (3)
     broc.get(0).get.data should be (3)
+  }
+
+
+  it should "return revisions that are unique to the value inserted" in {
+    val broc = new BroccoliTable[Int, Int]
+    val revision_1 = broc.put(0,1)
+    val computed_revision = broc.getRevision(broc.get(0).get)
+    val revision_2 = broc.put(0,1)
+    val revision_3 = broc.put(0,2)
+    revision_1 should be (computed_revision)
+    revision_2 should be (revision_1)
+    revision_3 should not be (revision_1)
   }
 
 
@@ -89,14 +100,14 @@ class BroccoliSpec extends FlatSpec with Matchers {
   that was put in. (Across values)""" in {
     val broc = new BroccoliTable[Int, Int]
     def getFuture(n : Int) : Future[List[(Revision, Int)]] = Future { 
-      (for (k <- 0 to n) yield { 
-        (broc.put(0, k), k)
+      (for (v <- 0 to n) yield { 
+        (broc.put(0, v), v)
       }).toList
     }
     val futures = Future.sequence(amounts.map(getFuture))
     val results = Await.result(futures, 4 seconds)
-    for (revs <- results; (rev, k) <- revs) {
-      broc.get(0, rev).get.data should be (k)
+    for (revs <- results; (rev, v) <- revs) {
+      broc.get(0, rev).get.data should be (v)
     }
   }
 

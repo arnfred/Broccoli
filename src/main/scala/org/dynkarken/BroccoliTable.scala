@@ -16,29 +16,35 @@ class BroccoliTable[K, V] {
   val head : TrieMap[K, Value[V]] = TrieMap.empty
   val revisions : TrieMap[Revision, Map[K, Value[V]]] = TrieMap.empty
   val valueHash : (Value[V] => Int) = TrieMap.empty.computeHash(_)
+  val revAlias : TrieMap[Revision, Revision] = TrieMap.empty
 
 
   // Inserts data that is converted to a value automatically
   // TODO: update to return value?
-  def put(key: K, data: V): Revision = {
-    put(key, Value(data))
+  def put(key: K, data: V): Revision = put(key, Value(data))
+
+  // Creates a revision based on a value
+  def getRevision(value : Value[V]) : Revision = {
+    Revision(valueHash(value) + value.salt)
   }
 
   // Inserts or updates value at position key. This operation is idempotent
   // A revision is returned if a value is updated. Otherwise None is returned
   def put(key : K, value : Value[V]) : Revision = {
-    val rev = Revision(valueHash(value) + value.salt)
+    var rev = getRevision(value)
     var currentRev = headRev
     var saved = false
-    // `head.putIfAbsent` is Some(value) if key already exists
+    // `head.putIfAbsent` is `Some(value)` if key already exists
     for (past_val <- head.putIfAbsent(key, value)) {
-      //println(s"""Key already exists as `$past_val`, updating...""")
       var past = past_val
       while (!saved) {
         // When the data is already present we just check that we have an up to
         // date `currentRev` before returning
         if (value.data == past.data) {
-          if (currentRev == headRev) saved = true
+          if (currentRev == headRev) {
+            saved = true
+            rev = getRevision(past)
+          }
           else {
             currentRev = headRev
             past = get(key, currentRev).get
@@ -47,20 +53,22 @@ class BroccoliTable[K, V] {
         // only update if value isn't the current value
         else {
           overwrite(key, value, rev)
-          currentRev = rev
           saved = true
         }
       }
-      currentRev
     }
     // We need to check that the revision isn't staked i.e. that another process
     // isn't in the progress of saving it and might already have made a snapshot
     // before `value` was added to the map.
-    if (!saved && revisions.get(currentRev) != None) {
-      currentRev = rev
-      overwrite(key, value, rev)
+    if (!saved) {
+      if (revisions.get(currentRev) != None) {
+        overwrite(key, value, rev)
+      }
+      else {
+        revAlias.put(rev, currentRev)
+      }
     }
-    currentRev
+    rev
   }
 
 
@@ -69,16 +77,21 @@ class BroccoliTable[K, V] {
 
 
   def get(key : K, rev : Revision) : Option[Value[V]] = {
+    // multiple revisions point to the same snapshot
+    val storedRev : Revision = revAlias.get(rev) match {
+      case None => rev
+      case Some(alias) => alias
+    }
     // In the simple case this is an old revision
-    if (rev != headRev) {
-      for (revMap <- revisions.get(rev);
+    if (storedRev != headRev) {
+      for (revMap <- revisions.get(storedRev);
            value <- revMap.get(key)) yield value
     }
     // Otherwise, we have to be careful that another thread won't overwrite the
     // value in a new revision concurrently with us fetching it
     else {
       val value = head.get(key)
-      if (rev != headRev) revisions(rev).get(key)
+      if (storedRev != headRev) revisions(storedRev).get(key)
       else value
     }
   }
